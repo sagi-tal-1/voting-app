@@ -1,0 +1,28 @@
+# File: helm/karpenter/values.yaml
+controller:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  tolerations:
+    - key: "CriticalAddonsOnly"
+      operator: "Equal"
+      value: "true"
+      effect: "NoSchedule"
+
+# AWS specific settings will be injected via the dynamic set blocks in main.tf
+# Don't use ${} interpolation in values.yaml as it won't work
+
+nodePoolDefaults:
+  requirements:
+    - key: kubernetes.io/arch
+      operator: In
+      values: ["amd64"]
+    - key: kubernetes.io/os
+      operator: In
+      values: ["linux"]
+  limits:
+    cpu: 1000
