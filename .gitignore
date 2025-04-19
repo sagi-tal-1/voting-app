@@ -1,1 +1,11 @@
 .terraform/
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+*.log
+*.out
+*.bak
+awscliv2.zip
+*.tfvars
+*.yaml
