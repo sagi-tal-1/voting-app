@@ -1,0 +1,12 @@
+# Check node details
+kubectl get nodes --label-columns=karpenter.sh/capacity-type
+
+# Watch for spot instance provisioning
+kubectl logs -f -n kube-system -l app.kubernetes.io/name=karpenter -c controller
+
+helm install karpenter oci://public.ecr.aws/karpenter/karpenter --namespace kube-system --version 1.4.0 --set webhook.enabled=true [other flags]
+
+
+kubectl delete secret sh.helm.release.v1.karpenter.v2 -n kube-system
+kubectl delete secret sh.helm.release.v1.karpenter.v1 -n kube-
+system

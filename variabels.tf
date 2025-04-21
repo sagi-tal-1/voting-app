@@ -1,56 +1,59 @@
+# VPC configuration variable
 variable "vpc" {
-  type = any
+  description = "VPC configuration map"
+  type        = map(any)
 }
+
+# EKS configuration variable
 variable "eks" {
-  type = any
+  description = "EKS cluster configuration map"
+  type        = map(any)
 }
 
-variable "secret_manager" {
-  type = any
-}
-variable "eks_storage_class" {
-  type = any
-}
-variable "eks_secret_copy" {
-  type = any
-}
+# EKS Namespace configuration
 variable "eks_namespace" {
-  type = any
+  description = "Kubernetes namespaces to create"
+  type        = map(any)
 }
+
+# EKS Secret configuration
 variable "eks_secret" {
-  type = any
+  description = "Kubernetes secrets to create"
+  type        = map(any)
 }
-variable "helm" {
-  type = any
+
+# EKS Secret Copy configuration
+variable "eks_secret_copy" {
+  description = "Configuration for copying secrets"
+  type        = map(any)
 }
+
+# AWS Secrets Manager configuration
+variable "secret_manager" {
+  description = "AWS Secrets Manager configuration"
+  type        = map(any)
+}
+
+# EKS Service Account configuration
 variable "eks_service_account" {
-  type = any
+  description = "Kubernetes service account configuration"
+  type        = map(any)
 }
+
+# EKS Storage Class configuration
+variable "eks_storage_class" {
+  description = "Kubernetes storage class configuration"
+  type        = map(any)
+}
+
+# Region configuration
 variable "region" {
-  type = string
-  default = "us-east-1"
+  description = "AWS region configuration"
+  type        = map(any)
 }
 
-variable "cluster_name" {
-  type    = string
-  default = "poc-us-east-1-eks"
+# Helm release configuration
+variable "helm" {
+  description = "Helm release configuration"
+  type        = map(any)
 }
-
-# variable "db_password" {
-#   type        = string
-#   sensitive   = true
-# }
-variable "control_plane_subnet_ids" {
-  type = list(string)
-  default = []
-}
-
-# variable "repository_username" {
-
-#   type        = any
-# }
-
-# variable "repository_password" {
-
-#   type        = any
-# }

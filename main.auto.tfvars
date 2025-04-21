@@ -1,3 +1,7 @@
+region = {
+  region = "us-east-1"
+}
+
 vpc = {
   vpc_eks = {
     cidr = "10.0.0.0/16"
@@ -14,18 +18,11 @@ helm = {
   karpenter = {
     chart            = "karpenter"
     repository       = "oci://public.ecr.aws/karpenter"
-    version          = "v0.33.1"
+    version          = "1.3.3"
     namespace        = "kube-system"
     create_namespace = true
-    values = [{
-      rbac = {
-        create = true
-      }
-      serviceAccount = {
-        create = true
-        name   = "karpenter"
-      }
-    }]
+    timeout          = 900
+    values          = []  # Remove the interpolated values
   }
 }
 
@@ -35,14 +32,13 @@ eks_secret = {
     labels = {
       "argocd.argoproj.io/secret-type" = "repo-creds"
     }
-    sshPrivateKey = ""
     data = {
-      url  = "git@github.com:sagi-tal-1"
-      type = "git"
+      sshPrivateKey = ""  # Moved inside data
+      url           = "git@github.com:sagi-tal-1"
+      type          = "git"
     }
     type = "Opaque"
   }
-
   exam-app-repo-github = {
     namespace = "argocd"
     labels = {
@@ -55,9 +51,9 @@ eks_secret = {
     }
     type = "Opaque"
   }
-
   mysql-db-secret = {
     namespace = "mysql"
+    labels    = {}
     data      = {}
     type      = "Opaque"
   }
@@ -70,8 +66,8 @@ eks_secret_copy = {
 }
 
 secret_manager = {
-  github-ssh-keys-secret       = {}
-  exam-db-secrets-deployment   = {}
+  github-ssh-keys-secret     = {}
+  exam-db-secrets-deployment = {}
 }
 
 eks_service_account = {
@@ -107,8 +103,8 @@ eks_namespace = {
 
   exam-app = {
     labels = {
-      name                                = "exam-app"
-      "argocd.argoproj.io/instance"       = "exam-app"
+      name                          = "exam-app"
+      "argocd.argoproj.io/instance" = "exam-app"
     }
   }
 }

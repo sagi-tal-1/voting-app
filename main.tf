@@ -1,15 +1,54 @@
 data "aws_availability_zones" "available" {}
 data "aws_caller_identity" "current" {}
+data "aws_ecrpublic_authorization_token" "token" {
+  provider = aws.use1
+}
 locals {
-  
-  name   = "sagi.stambolsky"
-  azs    = slice(data.aws_availability_zones.available.names, 0, 2)
+
+  name          = "sagi.stambolsky"
+  azs           = slice(data.aws_availability_zones.available.names, 0, 2)
   region_prefix = "us-east-1"
+  cluster_name  = "poc-${local.region_prefix}-eks"
+  private_subnet_ids = module.vpc["vpc_eks"].private_subnets
+
   tags = {
     Name      = "sagi.stambolsky"
     Objective = "Candidate"
     Owner     = "sagi stambolsky"
   }
+
+  karpenter_values = yamlencode({
+    rbac = {
+      create = true
+    }
+    serviceAccount = {
+      create = true
+      name   = "karpenter"
+      annotations = {
+        "eks.amazonaws.com/role-arn" = aws_iam_role.karpenter_controller.arn
+      }
+    }
+    logLevel = "debug"
+    settings = {
+      aws = {
+        clusterName     = module.eks["poc"].cluster_name
+        clusterEndpoint = module.eks["poc"].cluster_endpoint
+        defaultInstanceProfile = aws_iam_instance_profile.karpenter.name
+      }
+    }
+    controller = {
+      resources = {
+        requests = {
+          cpu    = "500m"
+          memory = "512Mi"
+        }
+        limits = {
+          cpu    = "500m"
+          memory = "512Mi"
+        }
+      }
+    }
+  })
 }
 data "aws_iam_policy" "ebs_csi_policy" {
   arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
@@ -76,7 +115,7 @@ module "vpc" {
   enable_nat_gateway = lookup(each.value, "enable_nat_gateway", true)
   single_nat_gateway = lookup(each.value, "single_nat_gateway", true)
 
-  
+
   # DNS Parameters in VPC
   enable_dns_hostnames = lookup(each.value, "enable_dns_hostnames", true)
   enable_dns_support   = lookup(each.value, "enable_dns_support", true)
@@ -92,8 +131,9 @@ module "vpc" {
   # Additional tags for the private subnets
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = 1
-    "kubernetes.io/role"              = "private"    # Add this for Karpenter
-    "karpenter.sh/discovery"          = "${each.key}-${local.region_prefix}-eks"  # Add this for Karpenter
+    "kubernetes.io/role"              = "private"
+    "karpenter.sh/discovery"          = local.cluster_name
+    "kubernetes.io/cluster/${local.cluster_name}" = "owned"
   }
   # Additional tags for the database subnets
   #   database_subnet_tags = {
@@ -127,20 +167,20 @@ module "ecr" {
   })
 }
 module "eks" {
-  for_each                                 = var.eks
+  for_each = var.eks
   source                                   = "terraform-aws-modules/eks/aws"
   version                                  = "20.33.1"
-  cluster_name                             = "${each.key}-${local.region_prefix}-eks"
+  cluster_name                             = local.cluster_name
   cluster_version                          = "1.31"
   cluster_endpoint_public_access           = lookup(each.value, "cluster_endpoint_public_access", true)
   enable_cluster_creator_admin_permissions = lookup(each.value, "enable_cluster_creator_admin_permissions ", true)
 
   cluster_security_group_tags = {
-    "karpenter.sh/discovery" = "${each.key}-${local.region_prefix}-eks"
+    "karpenter.sh/discovery" = local.cluster_name
   }
 
   node_security_group_tags = {
-    "karpenter.sh/discovery" = "${each.key}-${local.region_prefix}-eks"
+    "karpenter.sh/discovery" = local.cluster_name
   }
 
   # EKS Addons
@@ -190,14 +230,14 @@ module "eks" {
       desired_size = 2
       # Add taints to ensure only system pods land here
 
-    taints = [
-      {
-        key = "CriticalAddonsOnly"
-        value = "true"
-        effect = "NO_SCHEDULE"
-      }
-    ]
-    
+      taints = [
+        {
+          key    = "CriticalAddonsOnly"
+          value  = "true"
+          effect = "NO_SCHEDULE"
+        }
+      ]
+
       # This is not required - demonstrates how to pass additional configuration to nodeadm
       # Ref https://awslabs.github.io/amazon-eks-ami/nodeadm/doc/api/
       cloudinit_pre_nodeadm = [
@@ -225,11 +265,11 @@ module "eks" {
 resource "kubernetes_namespace" "this" {
   for_each = var.eks_namespace
   metadata {
-    annotations = lookup(each.value,"annotations",{})
-    labels      = lookup(each.value,"labels",{})
+    annotations = lookup(each.value, "annotations", {})
+    labels      = lookup(each.value, "labels", {})
     name        = each.key
   }
-depends_on = [
+  depends_on = [
     module.eks,
     null_resource.update_kubeconfig
   ]
@@ -239,9 +279,9 @@ depends_on = [
 resource "kubernetes_secret_v1" "this" {
   for_each = var.eks_secret
   metadata {
-    name = each.key
-    namespace = lookup(each.value,"namespace","default")
-    labels = lookup(each.value,"labels",{})
+    name      = each.key
+    namespace = lookup(each.value, "namespace", "default")
+    labels    = lookup(each.value, "labels", {})
   }
   depends_on = [
     kubernetes_namespace.this,
@@ -254,91 +294,111 @@ resource "kubernetes_secret_v1" "this" {
 # Karpenter Module
 ################################################################################
 module "karpenter" {
-  source = "terraform-aws-modules/eks/aws//modules/karpenter"
+  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
   version = "~> 20.35.0"
 
-  cluster_name = module.eks["poc"].cluster_name
+  cluster_name           = module.eks["poc"].cluster_name
+  irsa_oidc_provider_arn = module.eks["poc"].oidc_provider_arn
 
-  enable_v1_permissions             = true
-  enable_pod_identity               = true
-  create_pod_identity_association   = true
+  # Enable required features
+  enable_v1_permissions           = true
+  enable_pod_identity             = true
+  create_pod_identity_association = true
 
-  node_iam_role_additional_policies = {
-    AmazonSSMManagedInstanceCore = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-    AmazonEBSCSIDriverPolicy     = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
-    AmazonEC2ContainerRegistryReadOnly = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-    AmazonEKSWorkerNodePolicy   = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  
-  }
+  # Use existing IAM role from iam_karpenter.tf
+  create_iam_role = false # Don't create new role
 
+  # Instance profile settings
+  create_instance_profile = false
+
+  # Set the namespace
+  namespace = "kube-system"
+
+  # Tags
   tags = local.tags
 }
 
 resource "null_resource" "update_kubeconfig" {
   provisioner "local-exec" {
-    command = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks["poc"].cluster_name} && kubectl get nodes"
+    command = "aws eks update-kubeconfig --region ${lookup(var.region, "region", "us-east-1")} --name ${module.eks["poc"].cluster_name} && kubectl get nodes"
   }
-  
+
   depends_on = [module.eks]
 }
 
+resource "aws_iam_policy" "karpenter_node_subnet_discovery" {
+  name        = "KarpenterNodeSubnetDiscovery-${module.eks["poc"].cluster_name}"
+  description = "Allow Karpenter nodes to discover and query subnet information"
+  
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVpcs",
+          "ec2:DescribeAvailabilityZones"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+
+  tags = local.tags
+}
+
+resource "aws_iam_role_policy_attachment" "karpenter_node_subnet_discovery_attachment" {
+  policy_arn = aws_iam_policy.karpenter_node_subnet_discovery.arn
+  role       = aws_iam_role.karpenter_node.name
+}
 
 
 
 # And update your helm_release resource to use the existing values.yaml:
 resource "helm_release" "this" {
-  for_each         = var.helm
-  name             = lookup(each.value, "name", null) == null ? each.key : each.value.name
-  repository       = lookup(each.value, "repository", null)
-  chart            = lookup(each.value, "chart", null)
-  version          = lookup(each.value, "version", null)
-  create_namespace = lookup(each.value, "create_namespace", false)
-  namespace        = lookup(each.value, "namespace", null)
-  timeout          = 900
+  for_each = var.helm
 
-  # Modified values approach
-  values = lookup(each.value, "values", null) != null ? [
-    yamlencode(each.value.values[0])
-  ] : (
-    length(fileset("${path.module}/helm/${each.key}", "*.yaml")) > 0 ? [
-      for file in fileset("${path.module}/helm/${each.key}", "*.yaml") :
-      file("${path.module}/helm/${each.key}/${file}")
-    ] : []
-  )
+  name                = each.key
+  namespace           = "kube-system"  # Explicitly set to kube-system
+  create_namespace    = true
+  repository          = each.value.repository
+  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
+  repository_password = data.aws_ecrpublic_authorization_token.token.password
+  chart               = each.value.chart
+  version             = each.value.version
+  values              = try(each.value.values, [])
 
-  # Add any required dynamic settings via set blocks
+  force_update    = true
+  wait           = true
+  wait_for_jobs  = true
+  cleanup_on_fail = true
+  atomic         = true
+
   dynamic "set" {
     for_each = each.key == "karpenter" ? [1] : []
     content {
-      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-      value = aws_iam_role.karpenter_controller.arn
+      name  = "controller.env[0].name"
+      value = "CLUSTER_NAME"
     }
   }
-  
+
   dynamic "set" {
     for_each = each.key == "karpenter" ? [1] : []
     content {
-      name  = "settings.aws.clusterName"
+      name  = "controller.env[0].value"
       value = module.eks["poc"].cluster_name
     }
   }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "settings.aws.clusterEndpoint"
-      value = module.eks["poc"].cluster_endpoint
-    }
-  }
-  
+
   dynamic "set" {
     for_each = each.key == "karpenter" ? [1] : []
     content {
       name  = "settings.aws.defaultInstanceProfile"
-      value = aws_iam_instance_profile.karpenter_instance_profile.name
+      value = aws_iam_instance_profile.karpenter.name
     }
   }
-  
+
   dynamic "set" {
     for_each = each.key == "karpenter" ? [1] : []
     content {
@@ -346,73 +406,81 @@ resource "helm_release" "this" {
       value = module.eks["poc"].cluster_name
     }
   }
-  
+
   dynamic "set" {
     for_each = each.key == "karpenter" ? [1] : []
     content {
-      name  = "controller.env[0].name"
-      value = "CLUSTER_ENDPOINT"
-    }
-  }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[0].value"
-      value = module.eks["poc"].cluster_endpoint
-    }
-  }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[1].name"
-      value = "CLUSTER_NAME"
-    }
-  }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[1].value"
-      value = module.eks["poc"].cluster_name
-    }
-  }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[2].name"
-      value = "AWS_REGION"
-    }
-  }
-  
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[2].value"
-      value = var.region
+      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
+      value = aws_iam_role.karpenter_controller.arn
     }
   }
 
-  depends_on = [
-    module.eks,
-    module.karpenter,
-    kubernetes_namespace.this,
-    null_resource.update_kubeconfig
-  ]
+  dynamic "set" {
+    for_each = each.key == "karpenter" ? [1] : []
+    content {
+      name  = "crds.enabled"
+      value = "true"
+    }
+  }
+
+  dynamic "set" {
+    for_each = each.key == "karpenter" ? [1] : []
+    content {
+      name  = "crds.skipUpdate"
+      value = "false"
+    }
+  }
+
+  depends_on = [module.eks, module.karpenter, kubernetes_namespace.this, null_resource.update_kubeconfig]
 
   lifecycle {
-    replace_triggered_by = [
-      null_resource.update_kubeconfig
-    ]
+    replace_triggered_by = [null_resource.update_kubeconfig]
   }
 }
 
-# Create Karpenter NodePool
+# EC2NodeClass
+resource "kubectl_manifest" "karpenter_ec2nodeclass" {
+  yaml_body = <<-YAML
+  apiVersion: karpenter.k8s.aws/v1
+  kind: EC2NodeClass
+  metadata:
+    name: default
+  spec:
+    amiFamily: AL2
+    role: ${aws_iam_role.karpenter_node.name}
+    subnetSelectorTerms:
+      - id: ${local.private_subnet_ids[0]}
+      - id: ${local.private_subnet_ids[1]}
+    securityGroupSelectorTerms:
+      - tags:
+          karpenter.sh/discovery: ${local.cluster_name}
+    amiSelectorTerms:
+      - tags:
+          "aws-marketplace/amazon-eks-optimized-ami": "true"
+          "kubernetes.io/cluster/${module.eks["poc"].cluster_name}": "owned"
+    tags:
+      karpenter.sh/discovery: ${module.eks["poc"].cluster_name}
+      Name: karpenter-node-${local.cluster_name}
+      Owner: ${local.tags["Owner"]}
+    metadataOptions:
+      httpEndpoint: enabled
+      httpProtocolIPv6: disabled
+      httpPutResponseHopLimit: 2
+      httpTokens: required
+  YAML
+
+  depends_on = [
+    helm_release.this["karpenter"],
+    aws_iam_role.karpenter_node,
+    aws_iam_instance_profile.karpenter,
+    null_resource.update_kubeconfig
+  ]
+}
+
+# NodePool
 resource "kubectl_manifest" "karpenter_nodepool" {
   yaml_body = <<-YAML
-  apiVersion: karpenter.sh/v1beta1
+  apiVersion: karpenter.sh/v1
   kind: NodePool
   metadata:
     name: default
@@ -422,42 +490,65 @@ resource "kubectl_manifest" "karpenter_nodepool" {
         requirements:
           - key: karpenter.sh/capacity-type
             operator: In
-            values: ["on-demand"]
+            values: ["spot"]
           - key: kubernetes.io/arch
             operator: In
             values: ["amd64"]
           - key: node.kubernetes.io/instance-type
             operator: In
-            values: ["t3.medium", "t3.large"]
+            values: ["t3.medium", "t3.large", "t3.xlarge"]
           - key: topology.kubernetes.io/zone
             operator: In
             values: ${jsonencode(local.azs)}
         nodeClassRef:
+          apiVersion: karpenter.k8s.aws/v1
+          kind: EC2NodeClass
           name: default
+          group: karpenter.k8s.aws
     limits:
       cpu: "20"
       memory: "100Gi"
     disruption:
       consolidationPolicy: WhenEmpty
       consolidateAfter: 30s
----
-  apiVersion: karpenter.k8s.aws/v1beta1
-  kind: EC2NodeClass
-  metadata:
-    name: default
-  spec:
-    amiFamily: AL2023
-    subnetSelector:
-      kubernetes.io/role: private
-    securityGroupSelector:
-      karpenter.sh/discovery: ${module.eks["poc"].cluster_name}
-    tags:
-      karpenter.sh/discovery: ${module.eks["poc"].cluster_name}
-      Name: "karpenter-node"
-      Owner: "${local.tags["Owner"]}"
+      expireAfter: "720h"
   YAML
 
   depends_on = [
-    helm_release.this["karpenter"]
+    kubectl_manifest.karpenter_ec2nodeclass,
+    helm_release.this["karpenter"],
+    null_resource.update_kubeconfig
+  ]
+}
+
+resource "null_resource" "verify_karpenter" {
+  provisioner "local-exec" {
+    command = <<-EOT
+      echo "Waiting for Karpenter pod to be ready..."
+      kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=karpenter -n kube-system --timeout=300s
+      
+      echo "Checking Karpenter service account..."
+      kubectl get serviceaccount karpenter -n kube-system -o yaml
+      
+      echo "Verifying IAM role configuration..."
+      aws iam get-role --role-name ${aws_iam_role.karpenter_controller.name}
+      
+      echo "Checking Karpenter logs..."
+      kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter -c controller --tail=50
+      
+      echo "Verifying subnet discovery..."
+      aws ec2 describe-subnets \
+        --filters "Name=tag:karpenter.sh/discovery,Values=${module.eks["poc"].cluster_name}" \
+        --query 'Subnets[*].{ID:SubnetId,Tags:Tags}'
+
+      echo "Checking Karpenter events..."
+      kubectl get events -n kube-system --field-selector involvedObject.name=karpenter
+    EOT
+  }
+
+  depends_on = [
+    helm_release.this["karpenter"],
+    aws_iam_role.karpenter_controller,
+    aws_iam_role_policy_attachment.karpenter_controller_policy
   ]
 }

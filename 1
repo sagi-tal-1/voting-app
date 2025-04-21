@@ -1,21 +1,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: inflate
+  name: test-karpenter
 spec:
-  replicas: 0
+  replicas: 1
   selector:
     matchLabels:
-      app: inflate
+      app: test-karpenter
   template:
     metadata:
       labels:
-        app: inflate
+        app: test-karpenter
     spec:
+      nodeSelector:
+        karpenter.sh/capacity-type: spot
       containers:
-        - name: inflate
-          image: public.ecr.aws/eks-distro/kubernetes/pause:3.7
-          resources:
-            requests:
-              cpu: "1"
-              memory: "1.5Gi"
+      - name: pause
+        image: public.ecr.aws/eks-distro/kubernetes/pause:latest
+        resources:
+          requests:
+            cpu: 100m
+            memory: 100Mi

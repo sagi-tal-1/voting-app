@@ -6,10 +6,10 @@ terraform {
     }
     helm = {
       source  = "hashicorp/helm"
-      version = "2.12.1"  # Use stable version instead of pre-release
+      version = "2.12.1" # Use stable version instead of pre-release
     }
     kubernetes = {
-      source = "hashicorp/kubernetes"
+      source  = "hashicorp/kubernetes"
       version = "2.36.0"
     }
     kubectl = {
@@ -22,13 +22,22 @@ terraform {
     }
   }
 }
+
 # Configure the AWS Provider
 provider "aws" {
-  region = var.region
+  region = lookup(var.region, "region", "us-east-1")
 }
+
+# Additional AWS provider for ECR Public (us-east-1)
+provider "aws" {
+  alias  = "use1"
+  region = "us-east-1" # ECR Public is only available in us-east-1
+}
+
 data "aws_eks_cluster_auth" "this" {
   name = module.eks["poc"].cluster_name
 }
+
 # aws eks update-kubeconfig --region eu-north-1 --name exam-en1-eks
 provider "kubernetes" {
   host                   = module.eks["poc"].cluster_endpoint
@@ -54,7 +63,7 @@ provider "helm" {
         "--cluster-name",
         module.eks["poc"].cluster_name,
         "--region",
-        var.region
+        lookup(var.region, "region", "us-east-1") # Changed to use lookup
       ]
     }
   }
