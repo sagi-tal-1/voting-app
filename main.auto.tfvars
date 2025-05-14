@@ -77,12 +77,7 @@ EOF
       repository = "https://kubernetes.github.io/ingress-nginx"
       namespace = "ingress-nginx"
       create_namespace = true
-      values = <<EOF
-controller:
-  service:
-    annotations:
-      service.beta.kubernetes.io/aws-load-balancer-type: nlb
-EOF
+
     }
   }
 }
