@@ -13,8 +13,22 @@ controller:
       value: "true"
       effect: "NoSchedule"
 
-# AWS specific settings will be injected via the dynamic set blocks in main.tf
-# Don't use ${} interpolation in values.yaml as it won't work
+# Required AWS settings that were missing
+settings:
+  clusterName: "poc-us-east-1-eks"
+  clusterEndpoint: ""  # Will be filled by the cluster endpoint
+  defaultInstanceProfile: ""  # Will be filled by the instance profile name
+
+serviceAccount:
+  create: true
+  name: "karpenter"
+  annotations:
+    eks.amazonaws.com/role-arn: ""  # Will be filled by the role ARN
+
+rbac:
+  create: true
+
+logLevel: "debug"
 
 nodePoolDefaults:
   requirements:

@@ -68,7 +68,7 @@ resource "aws_iam_role" "karpenter_controller" {
 
 # Create separate policy resource
 resource "aws_iam_policy" "karpenter_controller" {
-  name = "KarpenterController-${module.eks["poc"].cluster_name}"
+  name        = "KarpenterController-${module.eks["poc"].cluster_name}"
   description = "Policy for Karpenter Controller"
 
   policy = jsonencode({
@@ -100,8 +100,8 @@ resource "aws_iam_policy" "karpenter_controller" {
         Resource = "*"
       },
       {
-        Effect = "Allow"
-        Action = "eks:DescribeCluster"
+        Effect   = "Allow"
+        Action   = "eks:DescribeCluster"
         Resource = "arn:aws:eks:${var.region.region}:${data.aws_caller_identity.current.account_id}:cluster/${module.eks["poc"].cluster_name}"
       }
     ]

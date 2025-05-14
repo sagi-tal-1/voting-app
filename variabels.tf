@@ -18,8 +18,13 @@ variable "eks_namespace" {
 
 # EKS Secret configuration
 variable "eks_secret" {
-  description = "Kubernetes secrets to create"
-  type        = map(any)
+  type = map(object({
+    namespace = string
+    labels    = optional(map(string), {})
+    data      = optional(map(string), {})
+    type      = optional(string, "Opaque")
+  }))
+  default = {}
 }
 
 # EKS Secret Copy configuration
@@ -31,7 +36,11 @@ variable "eks_secret_copy" {
 # AWS Secrets Manager configuration
 variable "secret_manager" {
   description = "AWS Secrets Manager configuration"
-  type        = map(any)
+  type = map(object({
+    description = optional(string)
+    secret_string = optional(string)
+  }))
+  default = {}
 }
 
 # EKS Service Account configuration
@@ -55,5 +64,19 @@ variable "region" {
 # Helm release configuration
 variable "helm" {
   description = "Helm release configuration"
-  type        = map(any)
+  type = object({
+    helm = map(object({
+      namespace        = string
+      create_namespace = optional(bool, true)
+      chart           = string
+      repository      = optional(string)
+      version         = optional(string)
+      timeout         = optional(number, 300)
+      values_file     = optional(string)
+      values          = optional(string)
+    }))
+  })
+  default = {
+    helm = {}
+  }
 }

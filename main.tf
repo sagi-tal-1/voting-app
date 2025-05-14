@@ -1,21 +1,22 @@
 data "aws_availability_zones" "available" {}
 data "aws_caller_identity" "current" {}
 data "aws_ecrpublic_authorization_token" "token" {
+
+  
   provider = aws.use1
 }
-locals {
-
-  name          = "sagi.stambolsky"
-  azs           = slice(data.aws_availability_zones.available.names, 0, 2)
-  region_prefix = "us-east-1"
-  cluster_name  = "poc-${local.region_prefix}-eks"
-  private_subnet_ids = module.vpc["vpc_eks"].private_subnets
-
-  tags = {
-    Name      = "sagi.stambolsky"
-    Objective = "Candidate"
-    Owner     = "sagi stambolsky"
+resource "null_resource" "create_karpenter_dir" {
+  provisioner "local-exec" {
+    command = "mkdir -p ${path.module}/helm/karpenter"
   }
+}
+
+locals {
+  name               = "sagi.s"
+  azs                = slice(data.aws_availability_zones.available.names, 0, 2)
+  region_prefix      = "us-east-1"
+  cluster_name       = "poc-${local.region_prefix}-eks"
+  private_subnet_ids = module.vpc["vpc_eks"].private_subnets
 
   karpenter_values = yamlencode({
     rbac = {
@@ -30,11 +31,10 @@ locals {
     }
     logLevel = "debug"
     settings = {
-      aws = {
-        clusterName     = module.eks["poc"].cluster_name
-        clusterEndpoint = module.eks["poc"].cluster_endpoint
-        defaultInstanceProfile = aws_iam_instance_profile.karpenter.name
-      }
+      # Using camelCase format as required by Karpenter
+      "clusterName"           = module.eks["poc"].cluster_name
+      "clusterEndpoint"       = module.eks["poc"].cluster_endpoint
+      "defaultInstanceProfile" = aws_iam_instance_profile.karpenter.name
     }
     controller = {
       resources = {
@@ -49,9 +49,28 @@ locals {
       }
     }
   })
+
+  tags = {
+    Name      = "sagi.s"
+    Objective = "Candidate"
+    Owner     = "sagi s"
+  }
 }
+
 data "aws_iam_policy" "ebs_csi_policy" {
   arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+# Create AWS Secrets Manager secret
+resource "aws_secretsmanager_secret" "mysql" {
+  name        = "mysql-credentials-${local.cluster_name}-${formatdate("YYYYMMDD-HHmmss", timestamp())}"
+  description = "MySQL database credentials"
+  tags        = local.tags
+}
+
+resource "aws_secretsmanager_secret_version" "mysql" {
+  secret_id     = aws_secretsmanager_secret.mysql.id
+  secret_string = lookup(var.secret_manager["mysql-credentials"], "secret_string", "{}")
 }
 
 module "irsa-ebs-csi" {
@@ -106,42 +125,38 @@ module "vpc" {
   azs             = lookup(each.value, "azs", local.azs)
   private_subnets = [for k, v in local.azs : cidrsubnet(each.value.cidr, 8, k)]
   public_subnets  = [for k, v in local.azs : cidrsubnet(each.value.cidr, 8, k + 4)]
-  # database_subnets                   = lookup(each.value,"database_subnets",null)
-  # create_database_subnet_group       = lookup(each.value,"create_database_subnet_group",null)
-  # create_database_subnet_route_table = lookup(each.value,"create_database_subnet_route_table",null)
-  # create_database_internet_gateway_route = true
-  # create_database_nat_gateway_route = true
+
   # NAT Gateways - Outbound Communication
   enable_nat_gateway = lookup(each.value, "enable_nat_gateway", true)
   single_nat_gateway = lookup(each.value, "single_nat_gateway", true)
 
-
   # DNS Parameters in VPC
   enable_dns_hostnames = lookup(each.value, "enable_dns_hostnames", true)
   enable_dns_support   = lookup(each.value, "enable_dns_support", true)
+
   # Additional tags for the VPC
   tags     = lookup(each.value, "tags", local.tags)
   vpc_tags = lookup(each.value, "vpc_tags", {})
 
-  # Additional tags
   # Additional tags for the public subnets
   public_subnet_tags = {
     "kubernetes.io/role/elb" = 1
+    Name = "Public Subnet"
   }
+
   # Additional tags for the private subnets
   private_subnet_tags = {
-    "kubernetes.io/role/internal-elb" = 1
-    "kubernetes.io/role"              = "private"
-    "karpenter.sh/discovery"          = local.cluster_name
+    "kubernetes.io/role/internal-elb"             = 1
+    "kubernetes.io/role"                          = "private"
+    "karpenter.sh/discovery"                      = local.cluster_name
     "kubernetes.io/cluster/${local.cluster_name}" = "owned"
+    Name = "Private Subnet"
   }
-  # Additional tags for the database subnets
-  #   database_subnet_tags = {
-  #     Name = local.name
-  #   }
-  # Instances launched into the Public subnet should be assigned a public IP address. Specify true to indicate that instances launched into the subnet should be assigned a public IP address
-  #   map_public_ip_on_launch = true
+
+  # Enable public IP on launch for public subnets
+  map_public_ip_on_launch = true
 }
+
 module "ecr" {
   source                            = "terraform-aws-modules/ecr/aws"
   version                           = "2.3.1"
@@ -167,7 +182,7 @@ module "ecr" {
   })
 }
 module "eks" {
-  for_each = var.eks
+  for_each                                 = var.eks
   source                                   = "terraform-aws-modules/eks/aws"
   version                                  = "20.33.1"
   cluster_name                             = local.cluster_name
@@ -228,18 +243,7 @@ module "eks" {
       # This value is ignored after the initial creation
       # https://github.com/bryantbiggs/eks-desired-size-hack
       desired_size = 2
-      # Add taints to ensure only system pods land here
-
-      taints = [
-        {
-          key    = "CriticalAddonsOnly"
-          value  = "true"
-          effect = "NO_SCHEDULE"
-        }
-      ]
-
-      # This is not required - demonstrates how to pass additional configuration to nodeadm
-      # Ref https://awslabs.github.io/amazon-eks-ami/nodeadm/doc/api/
+    
       cloudinit_pre_nodeadm = [
         {
           content_type = "application/node.eks.aws"
@@ -263,33 +267,46 @@ module "eks" {
 }
 
 resource "kubernetes_namespace" "this" {
-  for_each = var.eks_namespace
+  for_each = {
+    for k, v in var.eks_namespace : k => v
+    if k != "kube-system" # Skip kube-system as it's created by default
+  }
+  
   metadata {
     annotations = lookup(each.value, "annotations", {})
     labels      = lookup(each.value, "labels", {})
     name        = each.key
   }
+
+  lifecycle {
+    ignore_changes = [
+      metadata[0].annotations,
+      metadata[0].labels
+    ]
+  }
+
   depends_on = [
     module.eks,
     null_resource.update_kubeconfig
   ]
-
 }
 
-resource "kubernetes_secret_v1" "this" {
-  for_each = var.eks_secret
-  metadata {
-    name      = each.key
-    namespace = lookup(each.value, "namespace", "default")
-    labels    = lookup(each.value, "labels", {})
+# Explicitly wait for namespace deletion
+resource "null_resource" "wait_for_namespace_deletion" {
+  for_each = kubernetes_namespace.this
+
+  triggers = {
+    namespace_name = each.key
   }
-  depends_on = [
-    kubernetes_namespace.this,
-    null_resource.update_kubeconfig
-  ]
 
-
+  provisioner "local-exec" {
+    when    = destroy
+    command = <<-EOT
+      kubectl wait --for=delete namespace/${each.key} --timeout=300s || true
+    EOT
+  }
 }
+
 ################################################################################
 # Karpenter Module
 ################################################################################
@@ -305,11 +322,14 @@ module "karpenter" {
   enable_pod_identity             = true
   create_pod_identity_association = true
 
-  # Use existing IAM role from iam_karpenter.tf
-  create_iam_role = false # Don't create new role
+  # Use existing IAM role
+  create_iam_role = false
+  # Instead of irsa_role_arn, rely on service account annotations or module defaults
+  # The module should use aws_iam_role.karpenter_controller.arn via serviceAccount annotations
 
   # Instance profile settings
-  create_instance_profile = false
+  create_instance_profile = true
+  # The module will use aws_iam_instance_profile.karpenter.name internally
 
   # Set the namespace
   namespace = "kube-system"
@@ -317,6 +337,7 @@ module "karpenter" {
   # Tags
   tags = local.tags
 }
+
 
 resource "null_resource" "update_kubeconfig" {
   provisioner "local-exec" {
@@ -329,7 +350,7 @@ resource "null_resource" "update_kubeconfig" {
 resource "aws_iam_policy" "karpenter_node_subnet_discovery" {
   name        = "KarpenterNodeSubnetDiscovery-${module.eks["poc"].cluster_name}"
   description = "Allow Karpenter nodes to discover and query subnet information"
-  
+
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -353,88 +374,48 @@ resource "aws_iam_role_policy_attachment" "karpenter_node_subnet_discovery_attac
   role       = aws_iam_role.karpenter_node.name
 }
 
-
-
-# And update your helm_release resource to use the existing values.yaml:
+################################################################################
+# helm_release Module
+################################################################################
 resource "helm_release" "this" {
-  for_each = var.helm
+  for_each = var.helm.helm
 
-  name                = each.key
-  namespace           = "kube-system"  # Explicitly set to kube-system
-  create_namespace    = true
-  repository          = each.value.repository
-  repository_username = data.aws_ecrpublic_authorization_token.token.user_name
-  repository_password = data.aws_ecrpublic_authorization_token.token.password
-  chart               = each.value.chart
-  version             = each.value.version
-  values              = try(each.value.values, [])
+  name             = each.key
+  namespace        = lookup(each.value, "namespace", "kube-system")
+  create_namespace = lookup(each.value, "create_namespace", true)
+  repository       = lookup(each.value, "repository", null)
+  repository_username = lookup(each.value, "repository", "") == "oci://public.ecr.aws/karpenter" ? data.aws_ecrpublic_authorization_token.token.user_name : null
+  repository_password = lookup(each.value, "repository", "") == "oci://public.ecr.aws/karpenter" ? data.aws_ecrpublic_authorization_token.token.password : null
+  
+  chart            = each.value.chart
+  version          = lookup(each.value, "version", null)
+  timeout          = lookup(each.value, "timeout", 300)
+
+  values = concat(
+    length(fileset("${path.module}/helm/${each.key}", "*.yaml")) > 0 ? [
+      for file in fileset("${path.module}/helm/${each.key}", "*.yaml") :
+      file("${path.module}/helm/${each.key}/${file}")
+    ] : []
+  )
 
   force_update    = true
-  wait           = true
-  wait_for_jobs  = true
+  wait            = true
+  wait_for_jobs   = true
   cleanup_on_fail = true
-  atomic         = true
+  atomic          = true
+  replace         = true
 
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[0].name"
-      value = "CLUSTER_NAME"
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "controller.env[0].value"
-      value = module.eks["poc"].cluster_name
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "settings.aws.defaultInstanceProfile"
-      value = aws_iam_instance_profile.karpenter.name
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "settings.aws.interruptionQueueName"
-      value = module.eks["poc"].cluster_name
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn"
-      value = aws_iam_role.karpenter_controller.arn
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "crds.enabled"
-      value = "true"
-    }
-  }
-
-  dynamic "set" {
-    for_each = each.key == "karpenter" ? [1] : []
-    content {
-      name  = "crds.skipUpdate"
-      value = "false"
-    }
-  }
-
-  depends_on = [module.eks, module.karpenter, kubernetes_namespace.this, null_resource.update_kubeconfig]
+  depends_on = [
+    module.eks,
+    module.karpenter,
+    kubernetes_namespace.this,
+    null_resource.update_kubeconfig
+  ]
 
   lifecycle {
-    replace_triggered_by = [null_resource.update_kubeconfig]
+    ignore_changes = [
+      values,
+    ]
   }
 }
 
@@ -521,34 +502,82 @@ resource "kubectl_manifest" "karpenter_nodepool" {
   ]
 }
 
-resource "null_resource" "verify_karpenter" {
-  provisioner "local-exec" {
-    command = <<-EOT
-      echo "Waiting for Karpenter pod to be ready..."
-      kubectl wait --for=condition=ready pod -l app.kubernetes.io/name=karpenter -n kube-system --timeout=300s
-      
-      echo "Checking Karpenter service account..."
-      kubectl get serviceaccount karpenter -n kube-system -o yaml
-      
-      echo "Verifying IAM role configuration..."
-      aws iam get-role --role-name ${aws_iam_role.karpenter_controller.name}
-      
-      echo "Checking Karpenter logs..."
-      kubectl logs -n kube-system -l app.kubernetes.io/name=karpenter -c controller --tail=50
-      
-      echo "Verifying subnet discovery..."
-      aws ec2 describe-subnets \
-        --filters "Name=tag:karpenter.sh/discovery,Values=${module.eks["poc"].cluster_name}" \
-        --query 'Subnets[*].{ID:SubnetId,Tags:Tags}'
 
-      echo "Checking Karpenter events..."
-      kubectl get events -n kube-system --field-selector involvedObject.name=karpenter
-    EOT
+
+
+
+# Create ArgoCD repository secret
+resource "kubernetes_secret" "argocd_repo" {
+  metadata {
+    name      = "repo-poc-app"
+    namespace = "argocd"
+    labels = {
+      "argocd.argoproj.io/secret-type" = "repository"
+    }
   }
 
+  data = {
+    type          = "git"
+    url           = "git@github.com:emc19802/poc_app.git"
+    name          = "poc-app"
+    sshPrivateKey = file("${path.module}/terraform-deploy-key.txt")
+  }
+
+  type = "Opaque"
+
   depends_on = [
-    helm_release.this["karpenter"],
-    aws_iam_role.karpenter_controller,
-    aws_iam_role_policy_attachment.karpenter_controller_policy
+    kubernetes_namespace.this["argocd"]
   ]
 }
+
+# Update ArgoCD application to use the repository secret
+resource "kubectl_manifest" "poc_app" {
+  yaml_body = <<-YAML
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: poc-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:emc19802/poc_app.git
+    targetRevision: HEAD
+    path: voting-app-chart
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: exam-app
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+YAML
+
+  depends_on = [
+    module.eks,
+    null_resource.update_kubeconfig,
+    helm_release.this["argocd"],
+    kubernetes_secret.argocd_repo
+  ]
+}
+
+
+########################################################
+resource "kubernetes_storage_class" "ebs" {
+  metadata {
+    name = "auto-ebs-sc"
+    annotations = {
+      "storageclass.kubernetes.io/is-default-class" = "true"
+    }
+  }
+  storage_provisioner = "ebs.csi.aws.com"
+  volume_binding_mode = "WaitForFirstConsumer"
+  allow_volume_expansion = true
+  reclaim_policy = "Delete"
+  parameters = {
+    type = "gp2"
+    encrypted = "true"
+  }
+}
+
+
