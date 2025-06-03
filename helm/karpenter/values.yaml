@@ -16,14 +16,14 @@ controller:
 # Required AWS settings that were missing
 settings:
   clusterName: "poc-us-east-1-eks"
-  clusterEndpoint: ""  # Will be filled by the cluster endpoint
-  defaultInstanceProfile: ""  # Will be filled by the instance profile name
+  clusterEndpoint: "https://A9EE0174D85C4E795AAED1B2216C8B4C.gr7.us-east-1.eks.amazonaws.com"  # Updated with correct endpoint
+  defaultInstanceProfile: "KarpenterNodeInstanceProfile-poc-us-east-1-eks"
 
 serviceAccount:
   create: true
   name: "karpenter"
   annotations:
-    eks.amazonaws.com/role-arn: ""  # Will be filled by the role ARN
+    eks.amazonaws.com/role-arn: "arn:aws:iam::010575877879:role/KarpenterController-poc-us-east-1-eks"  # Added role ARN
 
 rbac:
   create: true

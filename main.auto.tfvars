@@ -79,6 +79,28 @@ EOF
       create_namespace = true
 
     }
+
+    keda = {
+      chart      = "keda"
+      repository = "https://kedacore.github.io/charts"
+      version    = "2.9.3"
+      namespace  = "keda"
+      create_namespace = true
+    }
+    prometheus = {
+      chart      = "prometheus"
+      repository = "https://prometheus-community.github.io/helm-charts"
+      version    = "25.8.1"
+      namespace  = "monitoring"
+      create_namespace = true
+    }
+    grafana = {
+      chart      = "grafana"
+      repository = "https://grafana.github.io/helm-charts"
+      version    = "7.0.11"
+      namespace  = "monitoring"
+      create_namespace = true
+    }
   }
 }
 
